@@ -212,6 +212,7 @@ ed_choice <- ed %>%
     select(ID, rel_date, actions, rewards, exp_group, exp_phase) %>% 
     group_by(ID, rel_date) %>% 
     group_split()
+write_csv(x = ed_choice %>% bind_rows(), "../datasets/individual_choice_data.csv")
 
 # model fit ----
 plan(multisession, workers = 4)
@@ -250,62 +251,5 @@ model_fits <- 1:1000 %>%
     })
 write_rds(model_fits, "../datasets/RL_model_fits.rds")
 
-optimal_mdl_fit <- model_fits %>% 
-    group_by(ID, rel_date) %>% 
-    slice(which.min(likelihood))
 
-optimal_mdl_fit %>% 
-    ggplot(aes(
-        rel_date, opt_tau, color=exp_group, group=ID
-    )) +
-    geom_point() +
-    geom_smooth(aes(group=exp_group))+
-    scale_y_continuous(transform = "log") +
-    facet_wrap(~exp_phase, scale="free_x")
-    
-optimal_mdl_fit %>% 
-    ggplot(aes(
-        rel_date, opt_alpha, color=exp_group, group=ID
-    )) +
-    geom_point() +
-    geom_smooth(aes(group=exp_group)) +
-    scale_y_continuous(transform = "log")
-
-# lmer fits ----
-
-mdl_tau <- lme4::glmer(
-    data = optimal_mdl_fit,
-    opt_tau+1 ~ exp_group * exp_phase  + (1|ID),
-    family = Gamma(link="log"),
-    control = lme4::glmerControl(
-        optimizer = "bobyqa",
-        optCtrl = list(maxfun = 2e5)
-    )
-)
-summary(mdl_tau)
-
-mdl_tau_emm <- emmeans::emmeans(
-    mdl_tau,
-    pairwise ~ exp_group | exp_phase,
-    type = "response"
-)
-mdl_tau_emm
-
-mdl_alpha <- lme4::glmer(
-    data = optimal_mdl_fit,
-    opt_alpha ~ exp_group * exp_phase + (1|ID),
-    family = Gamma(link="log"),
-    control = lme4::glmerControl(
-        optimizer = "bobyqa",
-        optCtrl = list(maxfun = 2e5)
-    )
-)
-summary(mdl_alpha)
-
-mdl_alpha_emm <- emmeans::emmeans(
-    mdl_alpha,
-    pairwise ~ exp_group | exp_phase,
-    type = "response"
-)
-mdl_alpha_emm
 
