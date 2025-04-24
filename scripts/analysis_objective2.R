@@ -47,10 +47,12 @@ summary(r_mdl1)
 
 r_mdl1_emm <- emmeans::emmeans(
     r_mdl1,
-    pairwise ~ exp_group * exp_phase,
+    revpairwise ~ exp_group * exp_phase,
     type = "response"
 )
 r_mdl1_emm
+
+broom.mixed::tidy(r_mdl1_emm$contrasts, conf.int = TRUE) %>% view
 
 ### number of events ----
 r_mdl2_d <- rd %>% 
@@ -83,10 +85,14 @@ summary(r_mdl2)
 
 r_mdl2_emm <- emmeans::emmeans(
     r_mdl2,
-    pairwise ~ exp_group * exp_phase,
+    revpairwise ~ exp_group * exp_phase,
     type = "response"
 )
 r_mdl2_emm
+
+broom.mixed::tidy(r_mdl2_emm$contrasts, conf.int = TRUE) %>% view
+
+
 
 ### number of rewards ----
 r_mdl3_d <- rd %>% 
@@ -119,10 +125,12 @@ summary(r_mdl3)
 
 r_mdl3_emm <- emmeans::emmeans(
     r_mdl3,
-    pairwise ~ exp_phase * exp_group,
+    revpairwise ~ exp_phase * exp_group,
     type = "response"
 )
 r_mdl3_emm
+
+broom.mixed::tidy(r_mdl3_emm$contrasts, conf.int = TRUE) %>% view
 
 r_mdl4_d <- rd %>% 
     group_by(ID, fecha, exp_group, exp_phase, sensor) %>% 
@@ -242,6 +250,7 @@ cluster_mdl_emm <- cluster_mdls %>%
     })
 cluster_mdl_emm
 
+
 cluster_n_mdl_emm <- cluster_n_mdls %>% 
     imap_dfr(., function(mdl, idx){
         emmeans::emmeans(
@@ -288,6 +297,8 @@ spout_emm <- emmeans::emmeans(
     type = "response"
 )
 spout_emm
+
+broom.mixed::tidy(spout_emm$contrasts, conf.int = TRUE) %>% view
 
 
 ### reinforcement learning ----
@@ -336,6 +347,8 @@ temperature_mdl_emm <- emmeans::emmeans(
 )
 temperature_mdl_emm
 
+broom.mixed::tidy(temperature_mdl_emm$contrasts, conf.int = TRUE) %>% view
+
 # same idea for the learning rate
 lrate_mdl <- glmmTMB::glmmTMB(
     data = rl_mdl_data,
@@ -350,6 +363,8 @@ lrate_mdl_emm <- emmeans::emmeans(
     type = "response"
 )
 lrate_mdl_emm
+
+broom.mixed::tidy(lrate_mdl_emm$contrasts, conf.int = TRUE) %>% view
 
 # correlation between parameters
 corr_rl_mdl <- glmmTMB::glmmTMB(
@@ -366,6 +381,8 @@ corr_rl_mdl_emm <- emmeans::emmeans(
 )
 corr_rl_mdl_emm
 
+broom.mixed::tidy(corr_rl_mdl_emm$contrasts, conf.int = TRUE) %>% view
+
 corr_rl_mdl_emtrends <- emmeans::emtrends(
     corr_rl_mdl,
     revpairwise ~ exp_group | learning_rate * exp_phase + rel_date,
@@ -374,7 +391,98 @@ corr_rl_mdl_emtrends <- emmeans::emtrends(
 )
 corr_rl_mdl_emtrends
 
+broom.mixed::tidy(corr_rl_mdl_emtrends$contrasts, conf.int = TRUE) %>% view
 
+### Tau vs H ----
+
+# compute entropy per ID per rel_date per exp_group per exp_phase
+binary_entropy <- function(p) {
+    if (p == 0 || p == 1) {
+        return(0)
+    }
+    return(- (p * log2(p) + (1 - p) * log2(1 - p)))
+}
+
+H_ind <- read_csv("../datasets/individual_choice_data.csv") %>% 
+    mutate(
+        actions = actions - 1
+    ) %>% 
+    group_by(ID, rel_date, exp_group, exp_phase) %>% 
+    summarise(
+        p_1 = mean(rewards)
+    ) %>% 
+    mutate(
+        H = binary_entropy(p_1)
+    ) %>% 
+    ungroup() 
+H_ind
+
+tau_H <- H_ind %>% 
+    filter(exp_group=="experimental",
+           exp_phase=="experimental") %>% 
+    left_join(., optimal_mdl_fit, by = c("ID", "rel_date",
+                                         "exp_group", "exp_phase")) %>% 
+    mutate(
+        temperature = ((opt_tau/5)* (n() - 1) + 0.5) / n()
+    ) %>% 
+    ungroup() %>% 
+    group_by(ID) %>% 
+    mutate(
+        rel_date = rel_date - min(rel_date)
+    )
+tau_H
+
+tau_h_mdl <- glmmTMB::glmmTMB(
+    data = tau_H,
+    temperature ~ H + rel_date + (1|ID),
+    family = glmmTMB::beta_family(link="logit")
+)
+summary(tau_h_mdl)
+
+tau_h_emm <- emmeans::emmeans(
+    tau_h_mdl,
+    ~ H + rel_date, 
+    at = list(H = seq(0, 1, 0.01)),
+    type = "response"
+)
+tau_h_emm
+
+tau_h_emtrends <- emmeans::emtrends(
+    tau_h_mdl,
+    specs = ~ H + rel_date, 
+    var = "H",
+    type = "response"
+) %>% emmeans::test()
+tau_h_emtrends
+
+broom.mixed::tidy(tau_h_emtrends, conf.int = TRUE)
+
+    
+
+
+
+## p:: h vs tau ----
+enp1 <- tau_h_emm %>% 
+    broom.mixed::tidy(conf.int = TRUE) %>% 
+    ggplot(aes(
+        H, response
+    )) +
+    geom_ribbon(aes(ymin=conf.low, ymax=conf.high),
+                alpha = 0.5, fill = "gray") +
+    geom_line(linewidth=0.5, color = "black") +
+    geom_point(
+        data = tau_H %>% group_by(ID) %>% summarise(H=mean(H), temperature=mean(temperature)),
+        aes(H, temperature), fill = "orange"
+    ) +
+    geom_vline(xintercept = summary(tau_H$H)[c(2, 5)], linetype="dashed") +
+    scale_x_continuous(breaks = seq(0, 1, 0.25)) +
+    scale_y_continuous(breaks = seq(0, 1, 0.25), 
+                       limits = c(0, 1), 
+                       expand = c(0,0)) +
+    ylab(latex2exp::TeX(r"($\tau_{scaled}$)")) +
+    xlab(latex2exp::TeX(r"($H_{rewards}$)")) +
+    theme_uncertainty
+enp1
 
 ## p::rl learning rate ----
 lrp1 <- lrate_mdl_emm$contrasts %>% 
@@ -408,8 +516,8 @@ lrp2 <- temperature_mdl_emm$contrasts %>%
     annotate("text", label="*", x=seq(1, 2), y=1.90, size=c(0,12)) +
     theme_uncertainty +
     scale_x_discrete(labels = c("Bsl.", "Exp.")) +
-    scale_y_continuous(breaks = seq(-0.5,2.25,0.25), 
-                       limits = c(-0.5, 2.25), 
+    scale_y_continuous(breaks = seq(-0.5,2.5,0.5), 
+                       limits = c(-0.5, 2.5), 
                        expand = c(0,0)) +
     ylab(latex2exp::TeX(r"($\tau_{\frac{HU-LU}{LU}}$)")) +
     xlab("") +
@@ -460,8 +568,9 @@ lrp4
 
 pred_grid <- spout_d %>% 
     distinct(ID, reward_type) %>% 
-    mutate(rel_date = 16,
-           preds = predict(spout_mdl, newdata = pred_grid))
+    mutate(rel_date = 16)
+pred_grid <- pred_grid %>% 
+    mutate(preds = predict(spout_mdl, newdata = pred_grid))
 pred_grid
 
 sp1 <- spout_emm$emmeans %>% 
@@ -486,7 +595,7 @@ sp1 <- spout_emm$emmeans %>%
     scale_y_continuous(breaks = seq(200, 1000, 200), 
                        limits = c(200, 1000), 
                        expand = c(0,0)) +
-    ylab(latex2exp::TeX(r"($\beta_{licks}$)")) +
+    ylab(latex2exp::TeX(r"($\hat{\mu}_{licks}$)")) +
     xlab("") +
     scale_fill_manual(values = c("gray", "orange", "orange")) 
 sp1
@@ -627,7 +736,7 @@ cp1 <- cluster_mdl_emm %>%
                        limits = c(0,3.5), 
                        expand = c(0,0)) +
     scale_x_continuous(breaks=seq(100, 1000, 100)) +
-    ylab(latex2exp::TeX(r"($Clst. size \ \beta_{HU/LU}$)")) +
+    ylab(latex2exp::TeX(r"($Clst. size \ \hat{\mu}_{HU/LU}$)")) +
     xlab("Cluster threshold (ms.)") 
 cp1
 
@@ -648,17 +757,18 @@ cp2 <- cluster_n_mdl_emm %>%
                        limits = c(0,4), 
                        expand = c(0,0)) +
     scale_x_continuous(breaks=seq(100, 1000, 100)) +
-    ylab(latex2exp::TeX(r"($Clst. number \ \beta_{HU/LU}$)")) +
+    ylab(latex2exp::TeX(r"($Clst. number \ \hat{\mu}_{HU/LU}$)")) +
     xlab("Cluster threshold (ms.)") 
 cp2
 
 # figures ----
 
-r1 <- (rp1 + rp2 + rp3)
+r1 <- (rp4 | rp1 | rp2 | rp3)
 r2 <- (cp1 + cp2 + sp1)
 r3 <- (lrp1 + lrp2)
-r4 <-  (lrp3 | lrp4)
+r4 <-  (lrp3 + lrp4 | enp1)
 
-r1 / r2 / (r3 + r4)
+r1 / r2 / (r3 | r4) +
+    plot_annotation(tag_levels = c("A"))
 
 
